@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Trans, t } from '@grafana/i18n';
-import { Alert, Icon, Stack, Text, TextLink } from '@grafana/ui';
+import { Alert, Icon, RadioButtonGroup, Stack, Text, TextLink } from '@grafana/ui';
 
 import { type ContactPoint } from '../../../api/notifications';
 import { ContactPointSelector } from '../../../contactPoints/components/ContactPointSelector/ContactPointSelector';
@@ -27,10 +27,15 @@ import {
 export type RecipientMode = 'contactPoint' | 'notificationPolicy';
 
 export interface NotificationsSettingsSelectorProps {
-  mode: RecipientMode;
+  /** Omit to let the selector own the mode and render a toggle; pass it to control the mode with no toggle. */
+  mode?: RecipientMode;
+  /** Fires when the toggle switches mode, after the value is reset. Never fires when `mode` is passed. */
+  onModeChange?: (mode: RecipientMode) => void;
+  /** Treats no contact point as valid. Missing contact points and invalid timings still report invalid. */
+  allowEmpty?: boolean;
   value: NotificationSettings | null;
   onChange: (value: NotificationSettings | null) => void;
-  /** Fires on mount and when validity changes; `false` when the value can't be saved (no or missing receiver,
+  /** Fires on mount and when validity changes; `false` when the value can't be saved (no or missing receiver unless `allowEmpty`,
    * a missing tree, invalid timings). Gate saving on it, since timing fields report values as typed. */
   onValidityChange?: (isValid: boolean) => void;
   /** Forwarded to RoutingTreePicker in notificationPolicy mode. See RoutingTreePicker's own docs. */
@@ -39,10 +44,19 @@ export interface NotificationsSettingsSelectorProps {
   manageContactPointsHref?: string;
 }
 
+function modeOf(value: NotificationSettings | null): RecipientMode | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.type === 'NamedRoutingTree' ? 'notificationPolicy' : 'contactPoint';
+}
+
 /** Picks where an alert rule's notifications go — a contact point or named policy tree — with no
- * RuleFormValues/AlertmanagerProvider dependency. `mode` is caller-controlled; no toggle rendered. */
+ * RuleFormValues/AlertmanagerProvider dependency. */
 export function NotificationsSettingsSelector({
-  mode,
+  mode: controlledMode,
+  onModeChange,
+  allowEmpty,
   value,
   onChange,
   onValidityChange,
@@ -50,13 +64,40 @@ export function NotificationsSettingsSelector({
   viewPoliciesHref,
   manageContactPointsHref,
 }: NotificationsSettingsSelectorProps) {
+  // A value decides its own mode so one that arrives after mount is shown; the toggle only matters while empty.
+  const [ownMode, setOwnMode] = useState<RecipientMode>('contactPoint');
+  const mode = controlledMode ?? modeOf(value) ?? ownMode;
+
+  const handleModeChange = (next: RecipientMode) => {
+    setOwnMode(next);
+    onChange(null);
+    onModeChange?.(next);
+  };
+
   return (
     <Stack direction="column" gap={1}>
+      {controlledMode === undefined && (
+        <RadioButtonGroup
+          value={mode}
+          onChange={handleModeChange}
+          options={[
+            {
+              value: 'contactPoint',
+              label: t('alerting.notifications-settings-selector.mode-contact-point', 'Contact point'),
+            },
+            {
+              value: 'notificationPolicy',
+              label: t('alerting.notifications-settings-selector.mode-notification-policy', 'Notification policy'),
+            },
+          ]}
+        />
+      )}
       {mode === 'contactPoint' ? (
         <ContactPointRecipient
           value={value?.type === 'SimplifiedRouting' ? value : null}
           onChange={onChange}
           onValidityChange={onValidityChange}
+          allowEmpty={allowEmpty}
           manageContactPointsHref={manageContactPointsHref}
         />
       ) : (
@@ -76,6 +117,7 @@ interface ContactPointRecipientProps {
   value: SimplifiedRoutingSettings | null;
   onChange: (value: NotificationSettings | null) => void;
   onValidityChange?: (isValid: boolean) => void;
+  allowEmpty?: boolean;
   manageContactPointsHref?: string;
 }
 
@@ -83,10 +125,11 @@ function ContactPointRecipient({
   value,
   onChange,
   onValidityChange,
+  allowEmpty,
   manageContactPointsHref,
 }: ContactPointRecipientProps) {
   const { selectorValue, isNotFound, isError } = useResolvedContactPoint(value?.receiver);
-  const isValid = Boolean(value?.receiver) && !isNotFound && isValidRoutingTimings(value ?? {});
+  const isValid = (allowEmpty || Boolean(value?.receiver)) && !isNotFound && isValidRoutingTimings(value ?? {});
 
   useEffect(() => {
     onValidityChange?.(isValid);
